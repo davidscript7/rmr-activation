@@ -1,10 +1,10 @@
 @echo off
-title RMR Activation - STEP 1: MONITORING
+title RMR Activation - STEP 1
 color 0A
 cd /d "%~dp0"
 echo.
 echo  ============================================================
-echo    RMR ACTIVATION — STEP 1: MONITORING
+echo    RMR ACTIVATION - STEP 1: MONITORING
 echo  ============================================================
 echo.
 python STEP1.py

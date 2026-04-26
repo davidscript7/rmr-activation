@@ -1,10 +1,10 @@
 @echo off
-title RMR Activation - STEP 3: CONTRACT DETAIL
+title RMR Activation - STEP 3
 color 0E
 cd /d "%~dp0"
 echo.
 echo  ============================================================
-echo    RMR ACTIVATION — STEP 3: CONTRACT DETAIL
+echo    RMR ACTIVATION - STEP 3: CONTRACT DETAIL
 echo  ============================================================
 echo.
 python STEP3.py
