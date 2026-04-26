@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────
+#  RMR Activation — .gitignore
+# ─────────────────────────────────────────────────────────
+
+# Real config (contains sensitive credentials and GUIDs)
+config.json
+
+# Microsoft auth token cache
+.token_cache.bin
+
+# Intermediate data files generated between steps
+input/.step1_data.json
+input/.step2_data.json
+
+# Input folder — SAP exports and Monitoring files (real operational data)
+input/
+!input/.gitkeep
+
+# Output folder — generated RMR files (real operational data)
+output/
+!output/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo

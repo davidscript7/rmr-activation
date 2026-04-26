@@ -1,0 +1,9 @@
+{
+  "_INSTRUCTIONS": "Copy this file to config.json and fill in your values. Update sharepoint_url and file_guid each month when you receive the new Monitoring link.",
+  "sharepoint_url": "https://[tenant]-my.sharepoint.com/:x:/r/personal/[file_owner_path]/_layouts/15/Doc.aspx?sourcedoc=%7BYOUR-FILE-GUID-HERE%7D&file=Monitoring%20[Month].xlsx&action=default",
+  "file_guid": "YOUR-FILE-GUID-HERE",
+  "file_owner_path": "firstname_lastname_company_com",
+  "tenant_id": "YOUR-TENANT-ID-HERE",
+  "sharepoint_host": "[tenant]-my.sharepoint.com",
+  "base_folder": "C:\\Users\\[your-user]\\[path-to-project]\\RMR_ACTIVATION"
+}
