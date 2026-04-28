@@ -26,9 +26,9 @@ INTER_STEP2   = os.path.join(INPUT_FOLDER, ".step2_data.json")
 
 # CONTRACT DETAIL column names (from SQ01 export)
 COL_LEGACY_NUM  = "Legacy contract number"
-COL_LEGACY_LINE = "Legacy contract line number"
+COL_LEGACY_LINE = "Legacy contract Line number"
 COL_TRANS_ID    = "Transaction ID"
-COL_ITEM_NUM    = "Item number in Document"
+COL_ITEM_NUM    = "Item Number in Document"
 
 # ─────────────────────────────────────────────────────────
 
