@@ -3,8 +3,7 @@
 ============================================================
   RMR ACTIVATION — STEP 2: IW75
   Reads the IW75 report, merges with Monitoring to retrieve
-  CFIN DATE, builds composite keys and generates the list
-  for SQ01.
+  CFIN DATE, builds keys and generates list for SQ01.
 ============================================================
 """
 
@@ -15,26 +14,26 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────
-#  CONFIGURATION — Update column names here if the
-#  IW75 exported Excel changes its structure
+# CONFIGURATION — Update column names here if the
+# IW75 exported Excel changes its structure
 # ─────────────────────────────────────────────────────────
+
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 INPUT_FOLDER = os.path.join(SCRIPT_DIR, "input")
 INTER_STEP1  = os.path.join(INPUT_FOLDER, ".step1_data.json")
 INTER_STEP2  = os.path.join(INPUT_FOLDER, ".step2_data.json")
 
-# IW75 column names
-COL_YOUR_REF      = "Your Reference"        # Matches SAP number from Monitoring
+# IW75 column names (from SAP Fiori export)
+COL_YOUR_REF      = "Your Reference"
 COL_SALES_DOC     = "Sales Document"
-COL_SALES_DOC_ITM = "Sales Document Items"  # Alt: "Sales Document Item"
-# ─────────────────────────────────────────────────────────
+COL_SALES_DOC_ITM = "Sales Document Items"  # Also tried as "Sales Document Item"
 
+# ─────────────────────────────────────────────────────────
 
 def banner(text):
     print("\n" + "=" * 60)
     print(f"  {text}")
     print("=" * 60)
-
 
 def find_iw75_file():
     """Finds the most recent IW75 file in the INPUT folder."""
@@ -44,7 +43,7 @@ def find_iw75_file():
         reverse=True
     )
     if not files:
-        print("  ❌ IW75 file not found in the INPUT folder.")
+        print("  ❌ IW75 file not found in INPUT folder.")
         print(f"     Path: {INPUT_FOLDER}")
         print("     File name must start with: IW75")
         print("     Example: IW75 April 4.21.2026.xlsx")
@@ -52,11 +51,10 @@ def find_iw75_file():
     print(f"  📄 File: {files[0]}")
     return os.path.join(INPUT_FOLDER, files[0])
 
-
 def detect_header_row(filepath):
     """
-    SAP sometimes exports title rows before the real column headers.
-    This function finds the row where 'Your Reference' first appears.
+    SAP sometimes exports title rows before the actual header.
+    This function finds the row where 'Your Reference' appears.
     """
     import pandas as pd
     df_raw = pd.read_excel(filepath, header=None, nrows=30, dtype=str)
@@ -64,27 +62,27 @@ def detect_header_row(filepath):
         vals = [str(v).strip() for v in row.values if str(v).strip() not in ("nan", "")]
         if COL_YOUR_REF in vals:
             return i
-    return 0  # Default to first row if not detected
-
+    return 0
 
 def read_iw75(filepath):
-    """Reads the IW75 file with automatic header row detection."""
+    """Reads the IW75 file with automatic header detection."""
     import pandas as pd
+
     header_row = detect_header_row(filepath)
     print(f"  📊 Header detected at row {header_row + 1}")
 
     df = pd.read_excel(filepath, header=header_row, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Validate required columns (try singular variant as fallback)
     required = [COL_YOUR_REF, COL_SALES_DOC, COL_SALES_DOC_ITM]
     missing  = [c for c in required if c not in df.columns]
+
     if missing:
         alt = {COL_SALES_DOC_ITM: "Sales Document Item"}
-        for col in missing:
+        for col in list(missing):
             if col in alt and alt[col] in df.columns:
-                df = df.rename(columns={alt[col]: col})
-        missing = [c for c in required if c not in df.columns]
+                df    = df.rename(columns={alt[col]: col})
+                missing.remove(col)
 
     if missing:
         print(f"\n  ❌ Missing columns: {missing}")
@@ -92,20 +90,16 @@ def read_iw75(filepath):
         print("  👉 Update column names in the CONFIGURATION section of STEP2.py")
         sys.exit(1)
 
-    # Convert Your Reference to numeric string (removes leading zeros)
-    df[COL_YOUR_REF] = df[COL_YOUR_REF].str.strip()
-
     def to_num_str(v):
         try:
             return str(int(float(v)))
         except (ValueError, TypeError):
             return str(v).strip()
 
-    df[COL_YOUR_REF]      = df[COL_YOUR_REF].apply(to_num_str)
-    df[COL_SALES_DOC]     = df[COL_SALES_DOC].apply(to_num_str)
-    df[COL_SALES_DOC_ITM] = df[COL_SALES_DOC_ITM].apply(to_num_str)
+    df[COL_YOUR_REF]      = df[COL_YOUR_REF].str.strip().apply(to_num_str)
+    df[COL_SALES_DOC]     = df[COL_SALES_DOC].str.strip().apply(to_num_str)
+    df[COL_SALES_DOC_ITM] = df[COL_SALES_DOC_ITM].str.strip().apply(to_num_str)
 
-    # Remove empty rows
     df = df[
         df[COL_YOUR_REF].notna() &
         (df[COL_YOUR_REF] != "") &
@@ -115,33 +109,57 @@ def read_iw75(filepath):
     print(f"  Valid rows in IW75: {len(df)}")
     return df
 
-
 def load_step1_data():
-    """Loads the SAP → CFIN DATE mapping generated by Step 1."""
+    """Loads SAP → CFIN DATE mapping and processing date generated by Step 1."""
     if not os.path.exists(INTER_STEP1):
         print("\n  ⚠️  Step 1 data file not found (.step1_data.json)")
         print("     Make sure you ran STEP1.bat before this step.")
         sys.exit(1)
+
     with open(INTER_STEP1, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return data.get("sap_to_cfin", {})
 
+    mapping         = data.get("sap_to_cfin", {})
+    sheets          = data.get("sheets_processed", [])
+    processing_date = data.get("processing_date")
+
+    if sheets:
+        label = ", ".join(sheets) if isinstance(sheets, list) else str(sheets)
+        print(f"  📅 Sheets processed in STEP1: {label}")
+
+    return mapping, processing_date
 
 def merge_cfin(df, sap_to_cfin):
-    """Adds CFIN DATE column by looking up each SAP number in the Monitoring data."""
+    """
+    Adds CFIN DATE column by merging with Monitoring data.
+    Reports any SAP numbers that appear in IW75 but not in Monitoring
+    (informational only — they will proceed without a CFIN DATE).
+    """
     def get_cfin(sap_val):
         return sap_to_cfin.get(str(sap_val).strip())
 
     df["CFIN DATE"] = df[COL_YOUR_REF].apply(get_cfin)
-    matched = df["CFIN DATE"].notna().sum()
-    print(f"  ✅ CFIN DATE merged: {matched}/{len(df)} rows")
-    return df
 
+    matched   = df["CFIN DATE"].notna().sum()
+    unmatched = len(df) - matched
+
+    print(f"  ✅ CFIN DATE merged: {matched}/{len(df)} rows")
+
+    if unmatched > 0:
+        unmatched_saps = df[df["CFIN DATE"].isna()][COL_YOUR_REF].drop_duplicates().tolist()
+        print(f"\n  ⚠️  {unmatched} row(s) in IW75 have no match in Monitoring:")
+        for sap in unmatched_saps[:10]:
+            print(f"     - SAP: {sap}")
+        if len(unmatched_saps) > 10:
+            print(f"     ... and {len(unmatched_saps) - 10} more.")
+        print("  → These will proceed to SQ01 without a CFIN DATE.")
+
+    return df
 
 def build_keys_and_sq01_list(df):
     """
-    Builds a composite key (Sales Document + Sales Document Items)
-    and generates the wildcard list for SQ01 (*number* format).
+    Builds the composite key (Sales Document + Sales Document Items)
+    and generates the unique list with asterisks for SQ01 input.
     """
     df["_KEY"] = df[COL_SALES_DOC].str.strip() + "_" + df[COL_SALES_DOC_ITM].str.strip()
 
@@ -149,7 +167,6 @@ def build_keys_and_sq01_list(df):
     sq01_list   = [f"*{d}*" for d in unique_docs if d and d.lower() != "nan"]
 
     return df, sq01_list
-
 
 def save_intermediate(df):
     """Saves the key → CFIN DATE mapping for Step 3 to consume."""
@@ -161,8 +178,8 @@ def save_intermediate(df):
 
     with open(INTER_STEP2, "w", encoding="utf-8") as f:
         json.dump({"key_to_cfin": mapping}, f, indent=2)
-    print(f"  💾 Data saved for STEP3 ({len(mapping)} keys)")
 
+    print(f"  💾 Data saved for STEP3 ({len(mapping)} keys)")
 
 def copy_to_clipboard(text):
     try:
@@ -172,9 +189,9 @@ def copy_to_clipboard(text):
     except Exception:
         return False
 
-
 def main():
     banner("RMR ACTIVATION — STEP 2: IW75")
+
     print("🔧 Searching for IW75 file...")
     filepath = find_iw75_file()
 
@@ -182,10 +199,10 @@ def main():
     df = read_iw75(filepath)
 
     print("\n🔗 Loading Monitoring data (STEP1)...")
-    sap_to_cfin = load_step1_data()
+    sap_to_cfin, processing_date = load_step1_data()
     df = merge_cfin(df, sap_to_cfin)
 
-    print("\n🔑 Building composite keys and SQ01 list...")
+    print("\n🔑 Building keys and SQ01 list...")
     df, sq01_list = build_keys_and_sq01_list(df)
     save_intermediate(df)
 
@@ -206,22 +223,23 @@ def main():
     print("     Environment → Change User Group → SD")
     print("  3. Select the Legacy Contract query")
     print("  4. In 'Legacy Contract Number':")
-    print("     → Click the multiple selection button")
-    print("     → Click Clipboard (paste numbers with asterisks)")
-    print("  5. Press F8 (Execute)")
+    print("     → Multiple selection button")
+    print("     → Clipboard (paste numbers with asterisks)")
+    print("  5. Execute (F8)")
     print("  6. Export to Excel:")
     print("     Menu → List → Save/Send → Local File → Spreadsheet")
     print(f"  7. Save in:")
     print(f"     {INPUT_FOLDER}")
+
+    # Use the processing date from STEP1 (sheet date), not today's date
     from datetime import datetime
-    _now  = datetime.now()
-    today = f"{_now.month}.{_now.day}.{_now.year}"
-    print(f"     Name: CONTRACT DETAIL {today}.xlsx")
+    file_date = processing_date if processing_date else \
+        f"{datetime.now().month}.{datetime.now().day}.{datetime.now().year}"
+    print(f"     Name: CONTRACT DETAIL {file_date}.xlsx")
     print()
     print("  8. Once you have the file → run STEP3.bat")
     print("=" * 60)
     input("\n  Press ENTER to close...")
-
 
 if __name__ == "__main__":
     try:

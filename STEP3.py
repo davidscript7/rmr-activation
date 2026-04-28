@@ -15,27 +15,27 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────
-#  CONFIGURATION — Update column names here if the
-#  SQ01 exported Excel changes its structure
+# CONFIGURATION — Update column names here if the
+# SQ01 exported Excel changes its structure
 # ─────────────────────────────────────────────────────────
+
 SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
 INPUT_FOLDER  = os.path.join(SCRIPT_DIR, "input")
 OUTPUT_FOLDER = os.path.join(SCRIPT_DIR, "output")
 INTER_STEP2   = os.path.join(INPUT_FOLDER, ".step2_data.json")
 
 # CONTRACT DETAIL column names (from SQ01 export)
-COL_LEGACY_NUM  = "Legacy contract number"       # May contain dashes
-COL_LEGACY_LINE = "Legacy contract line number"  # Line number
-COL_TRANS_ID    = "Transaction ID"               # Output column
-COL_ITEM_NUM    = "Item number in Document"      # Output column
-# ─────────────────────────────────────────────────────────
+COL_LEGACY_NUM  = "Legacy contract number"
+COL_LEGACY_LINE = "Legacy contract line number"
+COL_TRANS_ID    = "Transaction ID"
+COL_ITEM_NUM    = "Item number in Document"
 
+# ─────────────────────────────────────────────────────────
 
 def banner(text):
     print("\n" + "=" * 60)
     print(f"  {text}")
     print("=" * 60)
-
 
 def find_contract_file():
     """Finds the most recent CONTRACT DETAIL file in the INPUT folder."""
@@ -53,7 +53,6 @@ def find_contract_file():
     print(f"  📄 File: {files[0]}")
     return os.path.join(INPUT_FOLDER, files[0])
 
-
 def detect_header_row(filepath, key_col):
     """Detects the real header row in SAP exports (skips title rows)."""
     import pandas as pd
@@ -63,7 +62,6 @@ def detect_header_row(filepath, key_col):
         if key_col in vals:
             return i
     return 0
-
 
 def read_contract_detail(filepath):
     """Reads the CONTRACT DETAIL file with automatic header detection."""
@@ -95,15 +93,64 @@ def read_contract_detail(filepath):
     print(f"  Valid rows in CONTRACT DETAIL: {len(df)}")
     return df
 
+def validate_zeros(df, stage=""):
+    """
+    Checks that Transaction ID and Item Number in Document do not
+    contain '0' as their actual value. Zeros indicate a SAP export
+    problem and must not appear in the final output.
+    Exits with an error if any are found.
+    """
+    label  = f" ({stage})" if stage else ""
+    errors = []
+
+    zero_trans = df[df[COL_TRANS_ID].apply(
+        lambda v: str(v).strip() in ("0", "0.0")
+    )]
+    if not zero_trans.empty:
+        errors.append(
+            f"  ❌ {len(zero_trans)} row(s) have Transaction ID = 0{label}:\n"
+            + "\n".join(
+                f"     Row {i+1}: Contract {row[COL_LEGACY_NUM]} / Line {row[COL_LEGACY_LINE]}"
+                for i, (_, row) in enumerate(zero_trans.iterrows())
+            )
+        )
+
+    zero_item = df[df[COL_ITEM_NUM].apply(
+        lambda v: str(v).strip() in ("0", "0.0")
+    )]
+    if not zero_item.empty:
+        errors.append(
+            f"  ❌ {len(zero_item)} row(s) have Item Number = 0{label}:\n"
+            + "\n".join(
+                f"     Row {i+1}: Contract {row[COL_LEGACY_NUM]} / Line {row[COL_LEGACY_LINE]}"
+                for i, (_, row) in enumerate(zero_item.iterrows())
+            )
+        )
+
+    if errors:
+        print()
+        for msg in errors:
+            print(msg)
+        print()
+        print("  ⚠️  Zero values in Transaction ID or Item Number indicate a")
+        print("     SAP export issue. Review the CONTRACT DETAIL file and")
+        print("     re-export from SQ01 before continuing.")
+        input("\n  Press ENTER to abort...")
+        sys.exit(1)
+
+    print(f"  ✅ No zero values found in Transaction ID or Item Number.")
 
 def expand_dashes(df):
     """
     Expands rows where Legacy contract number contains dashes.
     Example: '123-456' with line '10' → two rows: ('123','10') and ('456','10')
     If the line number also contains dashes, they are paired positionally.
+
+    Returns the expanded DataFrame and a dict tracking which original
+    contract numbers were expanded, for later mismatch validation.
     """
-    rows_out = []
-    expanded = 0
+    rows_out     = []
+    expanded_map = {}   # original_num → [part1, part2, ...]
 
     for _, row in df.iterrows():
         num_val  = str(row[COL_LEGACY_NUM]).strip()
@@ -113,23 +160,31 @@ def expand_dashes(df):
             parts_num  = [p.strip() for p in num_val.split("-")]
             parts_line = [p.strip() for p in line_val.split("-")] if "-" in line_val else None
 
+            expanded_map[num_val] = parts_num
+
             for i, part in enumerate(parts_num):
                 new_row = row.copy()
                 new_row[COL_LEGACY_NUM] = part
                 if parts_line and i < len(parts_line):
                     new_row[COL_LEGACY_LINE] = parts_line[i]
+                new_row["_original_dash"] = num_val
                 rows_out.append(new_row)
-            expanded += 1
         else:
-            rows_out.append(row)
+            new_row = row.copy()
+            new_row["_original_dash"] = None
+            rows_out.append(new_row)
 
     import pandas as pd
     df_out = pd.DataFrame(rows_out).reset_index(drop=True)
-    if expanded:
-        print(f"  🔀 Rows expanded due to dashes: {expanded}")
-        print(f"  Total rows after expansion: {len(df_out)}")
-    return df_out
 
+    if expanded_map:
+        total_expanded = sum(len(v) for v in expanded_map.values())
+        print(f"  🔀 {len(expanded_map)} contract(s) with dashes expanded into {total_expanded} rows:")
+        for orig, parts in expanded_map.items():
+            print(f"     {orig}  →  {' | '.join(parts)}")
+        print(f"  Total rows after expansion: {len(df_out)}")
+
+    return df_out, expanded_map
 
 def to_num_str(v):
     """Converts a value to a numeric string without leading zeros."""
@@ -138,14 +193,12 @@ def to_num_str(v):
     except (ValueError, TypeError):
         return str(v).strip()
 
-
 def build_keys(df):
     """Builds composite key: Legacy contract number + Legacy contract line number."""
     df[COL_LEGACY_NUM]  = df[COL_LEGACY_NUM].apply(to_num_str)
     df[COL_LEGACY_LINE] = df[COL_LEGACY_LINE].apply(to_num_str)
-    df["_KEY"] = df[COL_LEGACY_NUM] + "_" + df[COL_LEGACY_LINE]
+    df["_KEY"]          = df[COL_LEGACY_NUM] + "_" + df[COL_LEGACY_LINE]
     return df
-
 
 def load_step2_data():
     """Loads the key → CFIN DATE mapping generated by Step 2."""
@@ -153,10 +206,10 @@ def load_step2_data():
         print("\n  ⚠️  Step 2 data file not found (.step2_data.json)")
         print("     Make sure you ran STEP2.bat before this step.")
         sys.exit(1)
+
     with open(INTER_STEP2, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data.get("key_to_cfin", {})
-
 
 def merge_cfin(df, key_to_cfin):
     """Merges composite keys with IW75 data to obtain CFIN DATE."""
@@ -164,14 +217,48 @@ def merge_cfin(df, key_to_cfin):
         return key_to_cfin.get(str(key).strip())
 
     df["CFIN DATE"] = df["_KEY"].apply(get_cfin)
+
     matched = df["CFIN DATE"].notna().sum()
     total   = len(df)
     print(f"  ✅ CFIN DATE merged: {matched}/{total} rows")
+
     if matched < total:
         unmatched = df[df["CFIN DATE"].isna()][COL_LEGACY_NUM].head(5).tolist()
         print(f"  ⚠️  No match found for (first 5): {unmatched}")
+
     return df
 
+def validate_dash_mismatches(df, expanded_map):
+    """
+    After merging CFIN DATE, checks whether every part of a dash-expanded
+    contract number found a match in IW75.
+
+    If one part is missing, it means IW75 didn't have that contract number —
+    the user must find it manually. Does NOT abort, but prints a clear warning.
+    """
+    if not expanded_map:
+        return
+
+    print()
+    issues_found = False
+
+    for original, parts in expanded_map.items():
+        mask      = df["_original_dash"] == original
+        sub       = df[mask].copy()
+        matched   = sub[sub["CFIN DATE"].notna()][COL_LEGACY_NUM].tolist()
+        unmatched = sub[sub["CFIN DATE"].isna()][COL_LEGACY_NUM].tolist()
+
+        if unmatched:
+            issues_found = True
+            print(f"  ⚠️  MISMATCH — Contract with dash: {original}")
+            print(f"     Expected parts : {' | '.join(parts)}")
+            print(f"     Found in IW75  : {' | '.join(matched) if matched else '(none)'}")
+            print(f"     NOT found      : {' | '.join(unmatched)}")
+            print(f"     → You need to manually look up: {' | '.join(unmatched)}")
+            print()
+
+    if not issues_found:
+        print(f"  ✅ All dash-expanded parts matched correctly in IW75.")
 
 def generate_output(df):
     """Generates the final formatted Excel file with 3 required columns."""
@@ -185,7 +272,9 @@ def generate_output(df):
 
     output = df[[COL_TRANS_ID, COL_ITEM_NUM, "CFIN DATE"]].copy()
     output = output.dropna(how="all")
-    output["CFIN DATE"] = pd.to_datetime(output["CFIN DATE"], errors="coerce").dt.strftime("%m/%d/%Y")
+    output["CFIN DATE"] = pd.to_datetime(
+        output["CFIN DATE"], errors="coerce"
+    ).dt.strftime("%m/%d/%Y")
 
     today    = datetime.now().strftime("%m.%d.%Y")
     out_name = f"RMR_{today}.xlsx"
@@ -193,7 +282,6 @@ def generate_output(df):
 
     output.to_excel(out_path, index=False, sheet_name="RMR Activation")
 
-    # Apply formatting
     wb = load_workbook(out_path)
     ws = wb.active
 
@@ -205,7 +293,7 @@ def generate_output(df):
     center_align = Alignment(horizontal="center", vertical="center")
 
     for col_idx in range(1, 4):
-        cell = ws.cell(row=1, column=col_idx)
+        cell           = ws.cell(row=1, column=col_idx)
         cell.fill      = header_fill
         cell.font      = header_font
         cell.border    = cell_border
@@ -215,7 +303,7 @@ def generate_output(df):
         fill_color = "EBF3FB" if row_idx % 2 == 0 else "FFFFFF"
         row_fill   = PatternFill("solid", fgColor=fill_color)
         for col_idx in range(1, 4):
-            cell = ws.cell(row=row_idx, column=col_idx)
+            cell           = ws.cell(row=row_idx, column=col_idx)
             cell.fill      = row_fill
             cell.border    = cell_border
             cell.alignment = center_align
@@ -233,7 +321,6 @@ def generate_output(df):
     wb.save(out_path)
     return out_path, len(output)
 
-
 def main():
     banner("RMR ACTIVATION — STEP 3: CONTRACT DETAIL")
 
@@ -243,17 +330,26 @@ def main():
     print("\n🔄 Reading CONTRACT DETAIL...")
     df = read_contract_detail(filepath)
 
+    print("\n🔍 Validating output columns (checking for zeros)...")
+    validate_zeros(df, stage="before expansion")
+
     print("\n🔀 Processing dashes in Legacy Contract Number...")
-    df = expand_dashes(df)
+    df, expanded_map = expand_dashes(df)
 
     print("\n🔑 Building merge keys...")
     df = build_keys(df)
+
+    print("\n🔍 Validating output columns after expansion (checking for zeros)...")
+    validate_zeros(df, stage="after expansion")
 
     print("\n🔗 Loading IW75 data (STEP2)...")
     key_to_cfin = load_step2_data()
 
     print("\n📌 Merging with CFIN DATE...")
     df = merge_cfin(df, key_to_cfin)
+
+    print("\n🔎 Checking dash expansion matches...")
+    validate_dash_mismatches(df, expanded_map)
 
     print("\n📝 Generating output file...")
     out_path, total = generate_output(df)
@@ -275,7 +371,6 @@ def main():
 
     print("\n  🎉 RMR Activation completed for today!")
     input("\n  Press ENTER to close...")
-
 
 if __name__ == "__main__":
     try:

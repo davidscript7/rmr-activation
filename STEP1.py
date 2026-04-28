@@ -14,8 +14,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────
-#  CONFIGURATION — Update column names here if the
-#  Monitoring file structure changes
+# CONFIGURATION — Update column names here if the
+# Monitoring file structure changes
 # ─────────────────────────────────────────────────────────
 
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -31,12 +31,10 @@ COL_SAP       = "SAP"
 
 # ─────────────────────────────────────────────────────────
 
-
 def banner(text):
     print("\n" + "=" * 60)
     print(f"  {text}")
     print("=" * 60)
-
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
@@ -46,7 +44,6 @@ def load_config():
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
 def install_if_missing(pkg):
     import importlib
     try:
@@ -55,13 +52,11 @@ def install_if_missing(pkg):
         print(f"  📦 Installing {pkg}...")
         os.system(f"pip install {pkg} -q")
 
-
 def check_dependencies():
     print("🔧 Checking dependencies...")
     for pkg in ["pandas", "openpyxl", "msal", "requests", "pyperclip"]:
         install_if_missing(pkg)
     print("  ✅ All dependencies installed\n")
-
 
 def download_monitoring(config):
     """
@@ -148,7 +143,6 @@ def download_monitoring(config):
         print(f"  ⚠️  Network error: {e}")
         return None
 
-
 def manual_download(config):
     """Guides the user through manually downloading the Monitoring file."""
     url = config.get("sharepoint_url", "")
@@ -187,11 +181,18 @@ def manual_download(config):
         print("  ❌ Monitoring file not found in INPUT folder.")
         sys.exit(1)
 
-
-def get_sheet(filepath):
+def get_sheets(filepath):
     """
-    Detects yesterday's sheet and asks for confirmation.
-    Falls back to manual selection if not found or rejected.
+    Lists all available Monitoring sheets and lets the user select
+    one or multiple days to process.
+
+    Accepted input formats:
+      "0"      → only sheet at index 0
+      "0,1,2"  → sheets at indexes 0, 1 and 2
+      "0-2"    → sheets at indexes 0 through 2 (inclusive range)
+      "all"    → all sheets
+
+    Returns a list of sheet name strings.
     """
     from datetime import datetime, timedelta
     import openpyxl
@@ -208,85 +209,149 @@ def get_sheet(filepath):
     yesterday  = datetime.now() - timedelta(days=1)
     auto_sheet = f"Monitoring {yesterday.strftime('%m.%d.%Y')}"
 
-    if auto_sheet in sheets:
-        print(f"\n  📅 Suggested sheet (yesterday): {auto_sheet}")
-        print()
-        resp = input("  Use this sheet? (Y/N): ").strip().upper()
-        if resp == "Y":
-            print(f"  ✅ Selected sheet: {auto_sheet}")
-            return auto_sheet
-
     print()
     print("  Available sheets:")
     for i, s in enumerate(sheets):
-        print(f"    [{i}] {s}")
+        marker = "  ← yesterday" if s == auto_sheet else ""
+        print(f"    [{i}] {s}{marker}")
+
+    print()
+    print("  You can select one or multiple days:")
+    print("    Single day  →  0")
+    print("    List        →  0,1,2")
+    print("    Range       →  0-2")
+    print("    All         →  all")
+    print()
 
     while True:
-        try:
-            idx    = int(input("\n  Which sheet to process? (enter number): "))
-            chosen = sheets[idx]
-            print(f"  ✅ Selected sheet: {chosen}")
-            return chosen
-        except (ValueError, IndexError):
-            print("  Invalid number. Please try again.")
+        raw = input("  Which sheet(s) to process? ").strip().lower()
 
+        if raw == "all":
+            selected = list(range(len(sheets)))
+
+        elif "-" in raw and "," not in raw:
+            try:
+                parts      = raw.split("-")
+                start, end = int(parts[0].strip()), int(parts[1].strip())
+                selected   = list(range(start, end + 1))
+            except (ValueError, IndexError):
+                print("  ⚠️  Invalid range. Example: 0-2")
+                continue
+
+        elif "," in raw:
+            try:
+                selected = [int(x.strip()) for x in raw.split(",")]
+            except ValueError:
+                print("  ⚠️  Invalid list. Example: 0,1,2")
+                continue
+
+        else:
+            try:
+                selected = [int(raw)]
+            except ValueError:
+                print("  ⚠️  Invalid input. Enter a number, list (0,1), range (0-2), or 'all'.")
+                continue
+
+        invalid = [i for i in selected if i < 0 or i >= len(sheets)]
+        if invalid:
+            print(f"  ⚠️  Index out of range: {invalid}. Valid range: 0–{len(sheets)-1}")
+            continue
+
+        chosen = [sheets[i] for i in selected]
+        print()
+        print(f"  ✅ Selected: {', '.join(chosen)}")
+        return chosen
 
 def process_monitoring(filepath):
     """
-    Reads the selected sheet and applies filters:
-    - Include rows where CLOSE = YES
-    - Include rows where INVOICE has a value
-    - Exclude rows where CFIN DATE is in the future
+    Reads one or more selected sheets and applies filters:
+      - Include rows where CLOSED = YES
+      - Include rows where INVOICE has a value
+      - Exclude rows where CFIN DATE is in the future
+
+    When multiple sheets are selected, results are combined.
+    Duplicate SAP numbers across sheets are deduplicated, keeping
+    the one with the earliest (most past) CFIN DATE.
+
     Returns a DataFrame with SAP and CFIN DATE columns.
     """
     import pandas as pd
 
     print("\n🔄 Processing Monitoring...")
-    sheet = get_sheet(filepath)
+    sheets = get_sheets(filepath)
 
-    df = pd.read_excel(filepath, sheet_name=sheet, dtype=str)
-    df.columns = [str(c).strip() for c in df.columns]
+    all_frames = []
+    for sheet in sheets:
+        print(f"\n  📋 Sheet: {sheet}")
+        df = pd.read_excel(filepath, sheet_name=sheet, dtype=str)
+        df.columns = [str(c).strip() for c in df.columns]
+        print(f"     Rows read: {len(df)}")
 
-    print(f"  Rows read: {len(df)}")
+        required = [COL_CLOSE, COL_INVOICE, COL_CFIN_DATE, COL_SAP]
+        missing  = [c for c in required if c not in df.columns]
+        if missing:
+            print(f"\n  ❌ Missing columns in sheet '{sheet}': {missing}")
+            print(f"  Available columns: {list(df.columns)}")
+            print("  👉 Update column names in the CONFIGURATION section of STEP1.py")
+            sys.exit(1)
 
-    required = [COL_CLOSE, COL_INVOICE, COL_CFIN_DATE, COL_SAP]
-    missing  = [c for c in required if c not in df.columns]
+        df["_cfin_dt"] = pd.to_datetime(df[COL_CFIN_DATE], errors="coerce")
+        today          = pd.Timestamp.today().normalize()
 
-    if missing:
-        print(f"\n  ❌ Missing columns: {missing}")
-        print(f"  Available columns: {list(df.columns)}")
-        print("  👉 Update column names in the CONFIGURATION section of STEP1.py")
+        cond_close   = df[COL_CLOSE].str.strip().str.upper() == "YES"
+        cond_invoice = (
+            df[COL_INVOICE].notna() &
+            (df[COL_INVOICE].str.strip() != "") &
+            (df[COL_INVOICE].str.strip().str.lower() != "nan")
+        )
+        cond_cfin = df["_cfin_dt"].isna() | (df["_cfin_dt"] <= today)
+
+        filtered = df[(cond_close | cond_invoice) & cond_cfin].copy()
+        print(f"     Rows after filtering: {len(filtered)}")
+
+        result = filtered[[COL_SAP, "_cfin_dt"]].copy()
+        result = result.rename(columns={"_cfin_dt": COL_CFIN_DATE})
+        result[COL_SAP] = result[COL_SAP].str.strip()
+        result = result[
+            result[COL_SAP].notna() &
+            (result[COL_SAP] != "") &
+            (result[COL_SAP].str.lower() != "nan")
+        ]
+        result["_source_sheet"] = sheet
+        all_frames.append(result)
+
+    if not all_frames:
+        print("\n  ❌ No data found in selected sheets.")
         sys.exit(1)
 
-    df["_cfin_dt"] = pd.to_datetime(df[COL_CFIN_DATE], errors="coerce")
-    today          = pd.Timestamp.today().normalize()
+    combined = pd.concat(all_frames, ignore_index=True)
 
-    cond_close   = df[COL_CLOSE].str.strip().str.upper() == "YES"
-    cond_invoice = (
-        df[COL_INVOICE].notna() &
-        (df[COL_INVOICE].str.strip() != "") &
-        (df[COL_INVOICE].str.strip().str.lower() != "nan")
-    )
-    cond_cfin = df["_cfin_dt"].isna() | (df["_cfin_dt"] <= today)
+    before_dedup = len(combined)
+    combined = combined.sort_values(COL_CFIN_DATE, na_position="last")
+    combined = combined.drop_duplicates(subset=[COL_SAP], keep="first")
+    after_dedup = len(combined)
 
-    filtered = df[(cond_close | cond_invoice) & cond_cfin].copy()
-    print(f"  Rows after filtering: {len(filtered)}")
+    if before_dedup != after_dedup:
+        print(f"\n  ℹ️  {before_dedup - after_dedup} duplicate SAP(s) across sheets — kept earliest CFIN DATE.")
 
-    result = filtered[[COL_SAP, "_cfin_dt"]].copy()
-    result = result.rename(columns={"_cfin_dt": COL_CFIN_DATE})
-    result[COL_SAP] = result[COL_SAP].str.strip()
-    result = result[
-        result[COL_SAP].notna() &
-        (result[COL_SAP] != "") &
-        (result[COL_SAP].str.lower() != "nan")
-    ]
-    result = result.drop_duplicates(subset=[COL_SAP])
+    print(f"\n  ✅ Total unique SAP numbers: {len(combined)}")
+    return combined
 
-    return result
-
+def extract_date_from_sheet(sheet_name):
+    """
+    Extracts the processing date from a sheet name like 'Monitoring 04.24.2026'.
+    Returns a formatted string like '4.24.2026', or None if it can't be parsed.
+    """
+    from datetime import datetime
+    try:
+        date_str = sheet_name.strip().split(" ", 1)[1]  # "04.24.2026"
+        dt = datetime.strptime(date_str, "%m.%d.%Y")
+        return f"{dt.month}.{dt.day}.{dt.year}"          # "4.24.2026" (no leading zero)
+    except Exception:
+        return None
 
 def save_intermediate(result):
-    """Saves SAP → CFIN DATE mapping to a JSON file for Step 2 to consume."""
+    """Saves SAP → CFIN DATE mapping, sheet info, and processing date for Step 2."""
     import pandas as pd
 
     mapping = {}
@@ -295,13 +360,26 @@ def save_intermediate(result):
         cfin = row[COL_CFIN_DATE]
         mapping[sap] = cfin.strftime("%Y-%m-%d") if pd.notna(cfin) else None
 
-    data = {"sap_to_cfin": mapping}
+    sheets_processed = (
+        list(result["_source_sheet"].unique())
+        if "_source_sheet" in result.columns else []
+    )
+
+    # Extract processing date from sheet names (use the earliest if multi-day)
+    processing_dates = [extract_date_from_sheet(s) for s in sheets_processed]
+    processing_dates = [d for d in processing_dates if d]
+    processing_date  = processing_dates[0] if processing_dates else None
+
+    data = {
+        "sap_to_cfin":      mapping,
+        "sheets_processed": sheets_processed,
+        "processing_date":  processing_date   # e.g. "4.24.2026" — used for file names
+    }
     os.makedirs(os.path.dirname(INTER_FILE), exist_ok=True)
     with open(INTER_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
     print(f"\n  💾 Data saved for STEP2 ({len(mapping)} records)")
-
 
 def copy_to_clipboard(text):
     try:
@@ -311,7 +389,6 @@ def copy_to_clipboard(text):
     except Exception:
         return False
 
-
 def main():
     banner("RMR ACTIVATION — STEP 1: MONITORING")
     check_dependencies()
@@ -320,6 +397,7 @@ def main():
 
     print("📥 Attempting automatic download from SharePoint...")
     filepath = download_monitoring(config)
+
     if not filepath:
         filepath = manual_download(config)
 
@@ -350,16 +428,21 @@ def main():
     print("     Menu → List → Save/Send → Local File → Spreadsheet")
     print(f"  6. Save in:")
     print(f"     {INPUT_FOLDER}")
+
+    # Use the processing date (from the sheet name), not today's date
     from datetime import datetime
-    _now   = datetime.now()
-    today  = f"{_now.month}.{_now.day}.{_now.year}"
-    month  = _now.strftime("%B")
-    print(f"     Name: IW75 {month} {today}.xlsx")
+    month = datetime.now().strftime("%B")
+    proc_sheet = (
+        result["_source_sheet"].iloc[0]
+        if "_source_sheet" in result.columns else None
+    )
+    file_date = extract_date_from_sheet(proc_sheet) if proc_sheet else \
+        f"{datetime.now().month}.{datetime.now().day}.{datetime.now().year}"
+    print(f"     Name: IW75 {month} {file_date}.xlsx")
     print()
     print("  7. Once you have the file → run STEP2.bat")
     print("=" * 60)
     input("\n  Press ENTER to close...")
-
 
 if __name__ == "__main__":
     try:
