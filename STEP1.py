@@ -24,10 +24,10 @@ INPUT_FOLDER = os.path.join(SCRIPT_DIR, "input")
 INTER_FILE   = os.path.join(INPUT_FOLDER, ".step1_data.json")
 
 # Exact column names in the Monitoring file
-COL_CLOSE     = "Closed"
-COL_INVOICE   = "Invoice"
-COL_CFIN_DATE = "CFINDATE"
-COL_SAP       = "SAP"
+COL_CLOSE        = "Closed"
+COL_INSTALL_ONLY = "Install Only"
+COL_CFIN_DATE    = "CFINDATE"
+COL_SAP          = "SAP"
 
 # ─────────────────────────────────────────────────────────
 
@@ -59,83 +59,93 @@ def check_dependencies():
     print("  ✅ All dependencies installed\n")
 
 def download_monitoring(config):
-    return None  # Automatic download placeholder — configure credentials in config.json
+    import glob
 
-    import msal
-    import requests
+    # ── If a real local Excel already exists (> 5 KB), use it directly ──
+    real_files = [
+        f for f in glob.glob(os.path.join(INPUT_FOLDER, "[Mm]onitoring*.xlsx"))
+        if os.path.getsize(f) >= 5000
+    ]
+    if real_files:
+        chosen = sorted(real_files, reverse=True)[0]
+        print(f"  ✅ Local file found: {os.path.basename(chosen)}")
+        return chosen
 
+    # ── Install pywin32 if missing ─────────────────────────────────────
+    try:
+        import win32com.client
+    except ImportError:
+        print("  📦 Installing pywin32...")
+        os.system("pip install pywin32 -q")
+        try:
+            import win32com.client
+        except ImportError:
+            print("  ❌ pywin32 could not be installed.")
+            return None
+
+    # ── Build download URL from config ────────────────────────────────
     FILE_GUID  = config.get("file_guid", "")
     FILE_OWNER = config.get("file_owner_path", "")
-    TENANT_ID  = config.get("tenant_id", "")
-    SP_HOST    = config.get("sharepoint_host", "")
-    CLIENT_ID  = "d3590ed6-52b3-4102-aeff-aad2292ab01c"
-    CACHE_FILE = os.path.join(SCRIPT_DIR, ".token_cache.bin")
-    SCOPES     = [f"https://{SP_HOST}/.default"]
+    SP_HOST    = config.get("sharepoint_host", "securitasgroup-my.sharepoint.com")
 
-    cache = msal.SerializableTokenCache()
-    if os.path.exists(CACHE_FILE):
-        try:
-            cache.deserialize(open(CACHE_FILE, "r").read())
-        except Exception:
-            pass
+    if FILE_GUID and FILE_OWNER:
+        open_url = (
+            f"https://{SP_HOST}/personal/{FILE_OWNER}"
+            f"/_layouts/15/download.aspx?UniqueId={FILE_GUID}"
+        )
+    else:
+        open_url = config.get("sharepoint_url", "")
 
-    app = msal.PublicClientApplication(
-        CLIENT_ID,
-        authority=f"https://login.microsoftonline.com/{TENANT_ID}",
-        token_cache=cache
-    )
-
-    result   = None
-    accounts = app.get_accounts()
-    if accounts:
-        result = app.acquire_token_silent(SCOPES, account=accounts[0])
-
-    if not result or "access_token" not in result:
-        print("🔐 Signing in to Microsoft 365...")
-        print("   A browser window will open. Sign in with your corporate account.\n")
-        try:
-            result = app.acquire_token_interactive(SCOPES)
-        except Exception as e:
-            print(f"  ⚠️  Interactive login error: {e}")
-            return None
-
-    if cache.has_state_changed:
-        with open(CACHE_FILE, "w") as f:
-            f.write(cache.serialize())
-
-    if not result or "access_token" not in result:
-        print(f"  ⚠️  Login failed: {result.get('error_description', 'unknown')}")
+    if not open_url:
+        print("  ⚠️  No URL available in config.json.")
         return None
 
-    token        = result["access_token"]
-    download_url = (
-        f"https://{SP_HOST}/personal/{FILE_OWNER}"
-        f"/_api/web/GetFileById('{FILE_GUID}')/$value"
-    )
+    print(f"  🔗 Opening: {open_url[:70]}...")
 
+    # ── Open with Excel COM and save locally ──────────────────────────
+    from datetime import datetime
+    month_name = datetime.now().strftime("%B")
+    filename   = f"Monitoring {month_name}.xlsx"
+    filepath   = os.path.join(INPUT_FOLDER, filename)
+
+    print("  📂 Opening file with Excel (using your Office credentials)...")
+    print("  ⏳ This may take 10-20 seconds...")
+
+    excel = None
+    wb    = None
     try:
-        resp = requests.get(
-            download_url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/octet-stream"
-            },
-            timeout=60
+        import win32com.client
+        excel = win32com.client.Dispatch("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+
+        wb = excel.Workbooks.Open(
+            open_url,
+            UpdateLinks=False,
+            ReadOnly=True,
+            IgnoreReadOnlyRecommended=True
         )
-        if resp.status_code == 200:
-            from datetime import datetime
-            month_name = datetime.now().strftime("%B")
-            filename   = f"Monitoring {month_name}.xlsx"
-            filepath   = os.path.join(INPUT_FOLDER, filename)
-            with open(filepath, "wb") as f:
-                f.write(resp.content)
-            print(f"  ✅ Downloaded → {filename}")
+
+        wb.SaveAs(filepath, FileFormat=51)
+        wb.Close(SaveChanges=False)
+        excel.Quit()
+
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 5000:
+            print(f"  ✅ Saved locally → {filename}")
             return filepath
         else:
-            print(f"  ⚠️  HTTP error {resp.status_code} while downloading.")
+            print("  ⚠️  File saved but too small. May have failed.")
             return None
+
     except Exception as e:
-        print(f"  ⚠️  Network error: {e}")
+        print(f"  ⚠️  Excel COM error: {e}")
+        try:
+            if wb:
+                wb.Close(SaveChanges=False)
+            if excel:
+                excel.Quit()
+        except Exception:
+            pass
         return None
 
 def manual_download(config):
@@ -257,7 +267,7 @@ def process_monitoring(filepath):
         df.columns = [str(c).strip() for c in df.columns]
         print(f"     Rows read: {len(df)}")
 
-        required = [COL_CLOSE, COL_INVOICE, COL_CFIN_DATE, COL_SAP]
+        required = [COL_CLOSE, COL_INSTALL_ONLY, COL_CFIN_DATE, COL_SAP]
         missing  = [c for c in required if c not in df.columns]
         if missing:
             print(f"\n  ❌ Missing columns in sheet '{sheet}': {missing}")
@@ -268,15 +278,18 @@ def process_monitoring(filepath):
         df["_cfin_dt"] = pd.to_datetime(df[COL_CFIN_DATE], errors="coerce")
         today          = pd.Timestamp.today().normalize()
 
-        cond_close   = df[COL_CLOSE].str.strip().str.upper() == "YES"
-        cond_invoice = (
-            df[COL_INVOICE].notna() &
-            (df[COL_INVOICE].str.strip() != "") &
-            (df[COL_INVOICE].str.strip().str.lower() != "nan")
+        cond_close = df[COL_CLOSE].str.strip().str.upper() == "YES"
+
+        cond_install_only = (
+            df[COL_INSTALL_ONLY].astype(str)
+            .str.strip()
+            .str.upper()
+            .isin(["NO", "N", "FALSE", "0", ""])
         )
+
         cond_cfin = df["_cfin_dt"].isna() | (df["_cfin_dt"] <= today)
 
-        filtered = df[(cond_close | cond_invoice) & cond_cfin].copy()
+        filtered = df[cond_close & cond_install_only & cond_cfin].copy()
         print(f"     Rows after filtering: {len(filtered)}")
 
         result = filtered[[COL_SAP, "_cfin_dt"]].copy()
@@ -308,10 +321,6 @@ def process_monitoring(filepath):
     return combined
 
 def parse_sheet_date(sheet_name):
-    """
-    Parses a sheet name like 'Monitoring 04.24.2026' into a datetime object.
-    Returns None if parsing fails.
-    """
     from datetime import datetime
     try:
         date_str = sheet_name.strip().split(" ", 1)[1]
@@ -320,17 +329,7 @@ def parse_sheet_date(sheet_name):
         return None
 
 def build_date_label(sheet_names):
-    """
-    Builds a smart, human-readable date label from one or more sheet names.
-
-    Rules:
-      - 1 sheet          → "4.28.2026"
-      - contiguous range → "4.26-28.2026"  (same month)
-                         → "4.29-5.1.2026" (cross-month)
-      - non-contiguous   → "4.24_4.26_4.28.2026"
-      - unparseable      → "April" (month fallback)
-    """
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
     dates = []
     for s in sheet_names:
