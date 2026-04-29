@@ -59,11 +59,6 @@ def check_dependencies():
     print("  ✅ All dependencies installed\n")
 
 def download_monitoring(config):
-    """
-    Attempts to download the Monitoring file automatically from SharePoint
-    using Microsoft 365 OAuth authentication with token caching.
-    Returns the local file path on success, or None on failure.
-    """
     return None  # Automatic download placeholder — configure credentials in config.json
 
     import msal
@@ -144,7 +139,6 @@ def download_monitoring(config):
         return None
 
 def manual_download(config):
-    """Guides the user through manually downloading the Monitoring file."""
     url = config.get("sharepoint_url", "")
     print("\n" + "─" * 60)
     print("📌 MANUAL DOWNLOAD")
@@ -182,18 +176,6 @@ def manual_download(config):
         sys.exit(1)
 
 def get_sheets(filepath):
-    """
-    Lists all available Monitoring sheets and lets the user select
-    one or multiple days to process.
-
-    Accepted input formats:
-      "0"      → only sheet at index 0
-      "0,1,2"  → sheets at indexes 0, 1 and 2
-      "0-2"    → sheets at indexes 0 through 2 (inclusive range)
-      "all"    → all sheets
-
-    Returns a list of sheet name strings.
-    """
     from datetime import datetime, timedelta
     import openpyxl
 
@@ -263,18 +245,6 @@ def get_sheets(filepath):
         return chosen
 
 def process_monitoring(filepath):
-    """
-    Reads one or more selected sheets and applies filters:
-      - Include rows where CLOSED = YES
-      - Include rows where INVOICE has a value
-      - Exclude rows where CFIN DATE is in the future
-
-    When multiple sheets are selected, results are combined.
-    Duplicate SAP numbers across sheets are deduplicated, keeping
-    the one with the earliest (most past) CFIN DATE.
-
-    Returns a DataFrame with SAP and CFIN DATE columns.
-    """
     import pandas as pd
 
     print("\n🔄 Processing Monitoring...")
@@ -337,21 +307,70 @@ def process_monitoring(filepath):
     print(f"\n  ✅ Total unique SAP numbers: {len(combined)}")
     return combined
 
-def extract_date_from_sheet(sheet_name):
+def parse_sheet_date(sheet_name):
     """
-    Extracts the processing date from a sheet name like 'Monitoring 04.24.2026'.
-    Returns a formatted string like '4.24.2026', or None if it can't be parsed.
+    Parses a sheet name like 'Monitoring 04.24.2026' into a datetime object.
+    Returns None if parsing fails.
     """
     from datetime import datetime
     try:
-        date_str = sheet_name.strip().split(" ", 1)[1]  # "04.24.2026"
-        dt = datetime.strptime(date_str, "%m.%d.%Y")
-        return f"{dt.month}.{dt.day}.{dt.year}"          # "4.24.2026" (no leading zero)
+        date_str = sheet_name.strip().split(" ", 1)[1]
+        return datetime.strptime(date_str, "%m.%d.%Y")
     except Exception:
         return None
 
+def build_date_label(sheet_names):
+    """
+    Builds a smart, human-readable date label from one or more sheet names.
+
+    Rules:
+      - 1 sheet          → "4.28.2026"
+      - contiguous range → "4.26-28.2026"  (same month)
+                         → "4.29-5.1.2026" (cross-month)
+      - non-contiguous   → "4.24_4.26_4.28.2026"
+      - unparseable      → "April" (month fallback)
+    """
+    from datetime import datetime, timedelta
+
+    dates = []
+    for s in sheet_names:
+        dt = parse_sheet_date(s)
+        if dt:
+            dates.append(dt)
+
+    if not dates:
+        return datetime.now().strftime("%B")
+
+    dates = sorted(set(dates))
+
+    def fmt(dt):
+        return f"{dt.month}.{dt.day}.{dt.year}"
+
+    if len(dates) == 1:
+        return fmt(dates[0])
+
+    is_contiguous = all(
+        (dates[i + 1] - dates[i]).days == 1
+        for i in range(len(dates) - 1)
+    )
+
+    if is_contiguous:
+        start, end = dates[0], dates[-1]
+        if start.year == end.year and start.month == end.month:
+            return f"{start.month}.{start.day}-{end.day}.{end.year}"
+        else:
+            return f"{start.month}.{start.day}-{end.month}.{end.day}.{end.year}"
+    else:
+        parts = [f"{dt.month}.{dt.day}" for dt in dates]
+        return "_".join(parts) + f".{dates[-1].year}"
+
+def extract_date_from_sheet(sheet_name):
+    dt = parse_sheet_date(sheet_name)
+    if dt:
+        return f"{dt.month}.{dt.day}.{dt.year}"
+    return None
+
 def save_intermediate(result):
-    """Saves SAP → CFIN DATE mapping, sheet info, and processing date for Step 2."""
     import pandas as pd
 
     mapping = {}
@@ -365,21 +384,24 @@ def save_intermediate(result):
         if "_source_sheet" in result.columns else []
     )
 
-    # Extract processing date from sheet names (use the earliest if multi-day)
-    processing_dates = [extract_date_from_sheet(s) for s in sheets_processed]
-    processing_dates = [d for d in processing_dates if d]
-    processing_date  = processing_dates[0] if processing_dates else None
+    date_label = build_date_label(sheets_processed)
+
+    first_sheet_date = None
+    if sheets_processed:
+        first_sheet_date = extract_date_from_sheet(sheets_processed[0])
 
     data = {
         "sap_to_cfin":      mapping,
         "sheets_processed": sheets_processed,
-        "processing_date":  processing_date   # e.g. "4.24.2026" — used for file names
+        "date_label":       date_label,
+        "processing_date":  first_sheet_date
     }
     os.makedirs(os.path.dirname(INTER_FILE), exist_ok=True)
     with open(INTER_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
     print(f"\n  💾 Data saved for STEP2 ({len(mapping)} records)")
+    print(f"  📅 Date label: {date_label}")
 
 def copy_to_clipboard(text):
     try:
@@ -416,6 +438,14 @@ def main():
     else:
         print("\n⚠️  Could not copy automatically. Please copy manually.")
 
+    sheets_processed = (
+        list(result["_source_sheet"].unique())
+        if "_source_sheet" in result.columns else []
+    )
+    date_label = build_date_label(sheets_processed)
+    from datetime import datetime
+    month = datetime.now().strftime("%B")
+
     banner("NEXT STEPS — SAP IW75")
     print("  1. Open SAP Fiori → transaction IW75")
     print("  2. 'Your Reference' field → multiple selection button")
@@ -428,17 +458,7 @@ def main():
     print("     Menu → List → Save/Send → Local File → Spreadsheet")
     print(f"  6. Save in:")
     print(f"     {INPUT_FOLDER}")
-
-    # Use the processing date (from the sheet name), not today's date
-    from datetime import datetime
-    month = datetime.now().strftime("%B")
-    proc_sheet = (
-        result["_source_sheet"].iloc[0]
-        if "_source_sheet" in result.columns else None
-    )
-    file_date = extract_date_from_sheet(proc_sheet) if proc_sheet else \
-        f"{datetime.now().month}.{datetime.now().day}.{datetime.now().year}"
-    print(f"     Name: IW75 {month} {file_date}.xlsx")
+    print(f"     Name: IW75 {month} {date_label}.xlsx")
     print()
     print("  7. Once you have the file → run STEP2.bat")
     print("=" * 60)
