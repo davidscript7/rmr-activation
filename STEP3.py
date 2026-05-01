@@ -14,6 +14,7 @@ import os
 import sys
 import json
 import warnings
+import shutil
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────
@@ -39,7 +40,10 @@ OWNER_1 = "Hector"
 OWNER_2 = "Daniel"
 
 # Local path for the shared RMR ACTIVATION file
-LOCAL_RMR = os.path.join(OUTPUT_FOLDER, "RMR ACTIVATION.xlsx")
+# ── Sincronizar de vuelta al OneDrive origen ──
+LOCAL_RMR        = os.path.join(OUTPUT_FOLDER, "RMR ACTIVATION.xlsx")
+LOCAL_RMR_SOURCE = r"C:\Users\arenahe\OneDrive - Securitas\RMR ACTIVATION.xlsx"
+
 
 def banner(text):
     print("\n" + "=" * 60)
@@ -213,85 +217,63 @@ def assign_owners(df):
 # RMR ACTIVATION.xlsx — guided download (no auth required)
 # ─────────────────────────────────────────────────────────
 
+
 def ensure_rmr_file(config):
-    """
-    Opens the SharePoint link in the browser and waits for the user
-    to download the file. Detects it automatically once it appears.
-    Removes any stale local copy beforehand.
-    """
-    import webbrowser
-    import time
+    import shutil
+    import glob
 
-    rmr_url = config.get("rmr_activation_url", "")
-
-    # Remove stale local copy so we always work with a fresh one
     if os.path.exists(LOCAL_RMR):
         os.remove(LOCAL_RMR)
         print("  🗑️  Removed previous local copy")
 
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-    print("\n" + "=" * 60)
-    print("  📥 DOWNLOAD RMR ACTIVATION.xlsx")
-    print("=" * 60)
-    print("\n  Opening SharePoint in your browser...")
+    # ── Buscar el archivo en rutas locales de OneDrive/Teams ──
+    user_profile = os.path.expanduser("~")
+    onedrive_base = os.path.join(user_profile, "OneDrive - Securitas")
 
-    if rmr_url:
-        webbrowser.open(rmr_url)
-    else:
-        print("  ⚠️  rmr_activation_url not set in config.json")
-        print("      Open the file manually in your browser.")
+    search_paths = [
+        # Teams Chat Files (más común)
+        os.path.join(onedrive_base, "Microsoft Teams Chat Files", "RMR ACTIVATION.xlsx"),
+        # SharePoint synced
+        os.path.join(onedrive_base, "General", "RMR ACTIVATION.xlsx"),
+        # Cualquier subcarpeta de OneDrive
+        *glob.glob(os.path.join(onedrive_base, "**", "RMR ACTIVATION.xlsx"), recursive=True),
+        # Config override
+        config.get("rmr_local_path", ""),
+    ]
 
+    for path in search_paths:
+        if path and os.path.exists(path) and os.path.getsize(path) > 50000:
+            size_kb = os.path.getsize(path) // 1024
+            print(f"  📂 Found locally: {path}")
+            shutil.copy2(path, LOCAL_RMR)
+            print(f"  ✅ Copied → {os.path.basename(LOCAL_RMR)} ({size_kb} KB)")
+            return
+
+    print("  ⚠️  File not found in OneDrive sync folders.")
+    print(f"     Searched in: {onedrive_base}")
     print()
-    print("  In the browser:")
-    print("  1. Click  File → Download  (or the Download button)")
-    print(f"  2. Save it here with this exact name:")
-    print(f"     {LOCAL_RMR}")
+    print("  📌 One-time setup: add this to config.json:")
+    print('     "rmr_local_path": "C:\\\\ruta\\\\exacta\\\\RMR ACTIVATION.xlsx"')
     print()
-    print("  Waiting for the file to appear automatically...")
-    print("  (press Ctrl+C to cancel and enter the path manually)")
-    print("=" * 60)
+    print(f"  Or save it manually here and press ENTER:")
+    print(f"  {LOCAL_RMR}")
+    input("\n  Press ENTER to continue...")
 
-    # Poll for up to 3 minutes, checking every 2 seconds
-    timeout  = 180
-    interval = 2
-    elapsed  = 0
+    if not os.path.exists(LOCAL_RMR) or os.path.getsize(LOCAL_RMR) < 50000:
+        print("  ❌ File not found or too small. Exiting.")
+        input("\nPress ENTER to close...")
+        sys.exit(1)
 
-    try:
-        while elapsed < timeout:
-            if os.path.exists(LOCAL_RMR):
-                # Small extra wait to ensure the file is fully written
-                time.sleep(1)
-                size_kb = os.path.getsize(LOCAL_RMR) // 1024
-                print(f"\n  ✅ File detected! ({size_kb} KB) — continuing...")
-                return
-            time.sleep(interval)
-            elapsed += interval
-            if elapsed % 20 == 0:
-                remaining = timeout - elapsed
-                print(f"  ⏳ Still waiting... ({remaining}s remaining)")
-
-    except KeyboardInterrupt:
-        pass
-
-    # Timeout or cancelled — ask for manual confirmation
-    if not os.path.exists(LOCAL_RMR):
-        print(f"\n  ⚠️  File not detected at expected path.")
-        print(f"     Expected: {LOCAL_RMR}")
-        input("\n  Save the file there and press ENTER to continue...")
-
-        if not os.path.exists(LOCAL_RMR):
-            print("\n  ❌ File still not found. Exiting.")
-            input("\n  Press ENTER to close...")
-            sys.exit(1)
 
 # ─────────────────────────────────────────────────────────
 # APPEND TO RMR ACTIVATION.xlsx
 # ─────────────────────────────────────────────────────────
 
 def get_current_month_sheet():
-    from datetime import datetime
-    return datetime.now().strftime("%B").upper()
+    from datetime import datetime, timedelta
+    return (datetime.now() - timedelta(days=1)).strftime("%B").upper()
 
 
 def append_to_rmr_activation(new_rows_df):
@@ -464,6 +446,12 @@ def append_to_rmr_activation(new_rows_df):
 
     os.remove(tmp_path)
     print(f"  💾 File saved locally.")
+
+    import shutil
+    if os.path.exists(LOCAL_RMR_SOURCE):
+        shutil.copy2(LOCAL_RMR, LOCAL_RMR_SOURCE)
+        print(f"  🔄 Synced back → OneDrive (Teams will update automatically)")
+
     return first_empty_row, new_end_row
 
 # ─────────────────────────────────────────────────────────
@@ -499,23 +487,16 @@ def main():
 
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
+
+
     # ── Auto-download RMR ACTIVATION.xlsx ────────────────
+
     ensure_rmr_file(config)
 
     print("\n📝 Appending new rows to RMR ACTIVATION.xlsx...")
     first_row, last_row = append_to_rmr_activation(new_rows)
 
-    print("\n" + "=" * 60)
-    print("  📋 MANUAL ACTION REQUIRED — UPLOAD TO SHAREPOINT:")
-    print("=" * 60)
-    print(f"\n  The updated file is at:")
-    print(f"  {LOCAL_RMR}")
-    print(f"\n  Upload it manually to SharePoint:")
-    print(f"  1. Open Teams → the chat where RMR ACTIVATION.xlsx lives")
-    print(f"  2. Click '...' on the file → Upload new version")
-    print(f"     (or delete the old one and upload the new one)")
-    print("=" * 60)
-
+   
     banner(f"✅ PROCESS COMPLETED — {len(new_rows)} records appended")
     print(f"  Sheet:        {get_current_month_sheet()}")
     print(f"  Rows added:   {first_row} → {last_row}")
