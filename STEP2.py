@@ -131,8 +131,29 @@ def load_step1_data():
     return mapping, date_label
 
 def merge_cfin(df, sap_to_cfin):
+    """
+    Merge CFIN DATE from STEP1 data.
+    Tries multiple formats: direct, with C0, with C prefix.
+    """
     def get_cfin(sap_val):
-        return sap_to_cfin.get(str(sap_val).strip())
+        sap_val = str(sap_val).strip()
+        
+        # Try 1: Direct match
+        result = sap_to_cfin.get(sap_val)
+        if result:
+            return result
+        
+        # Try 2: Add C0 prefix
+        result = sap_to_cfin.get(f"C0{sap_val}")
+        if result:
+            return result
+        
+        # Try 3: Add C prefix only
+        result = sap_to_cfin.get(f"C{sap_val}")
+        if result:
+            return result
+        
+        return None
 
     df["CFIN DATE"] = df[COL_YOUR_REF].apply(get_cfin)
 
@@ -143,7 +164,7 @@ def merge_cfin(df, sap_to_cfin):
 
     if unmatched > 0:
         unmatched_saps = df[df["CFIN DATE"].isna()][COL_YOUR_REF].drop_duplicates().tolist()
-        print(f"\n  ⚠️  {unmatched} row(s) in IW75 have no match in Monitoring:")
+        print(f"\n  ⚠️  {unmatched} row(s) in IW75 have no match:")
         for sap in unmatched_saps[:10]:
             print(f"     - SAP: {sap}")
         if len(unmatched_saps) > 10:

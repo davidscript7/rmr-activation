@@ -1,9 +1,31 @@
 {
-  "_INSTRUCTIONS": "Copy this file to config.json and fill in your values. Update sharepoint_url and file_guid each month when you receive the new Monitoring link.",
-  "sharepoint_url": "https://[tenant]-my.sharepoint.com/:x:/r/personal/[file_owner_path]/_layouts/15/Doc.aspx?sourcedoc=%7BYOUR-FILE-GUID-HERE%7D&file=Monitoring%20[Month].xlsx&action=default",
-  "file_guid": "YOUR-FILE-GUID-HERE",
-  "file_owner_path": "firstname_lastname_company_com",
+  "_comment": "RMR Activation - Configuration File (Power Query + SharePoint Lists version)",
+  
+  "sharepoint_site_url": "https://[tenant].sharepoint.com/sites/[YourSiteName]",
+  
+  "list_1_name": "Install Projects to Process (1070)",
+  "list_1_url": "https://[tenant].sharepoint.com/sites/[YourSiteName]/Lists/InstallProjectsToProcess1070",
+  
+  "list_2_name": "RMR ACTIVATION",
+  "list_2_url": "https://[tenant].sharepoint.com/sites/[YourSiteName]/Lists/RMRActivation",
+  
+  "rmr_master_path": "C:\\Users\\[YourUser]\\[Path]\\RMR_ACTIVATION\\input\\RMR_Master.xlsm",
+  
+  "base_folder": "C:\\Users\\[YourUser]\\[Path]\\RMR_ACTIVATION",
+  
+  "owner": "Hector",
+  
   "tenant_id": "YOUR-TENANT-ID-HERE",
-  "sharepoint_host": "[tenant]-my.sharepoint.com",
-  "base_folder": "C:\\Users\\[your-user]\\[path-to-project]\\RMR_ACTIVATION"
+  
+  "client_id": "",
+  "client_secret": "",
+  
+  "_instructions": {
+    "sharepoint_site_url": "Your SharePoint site base URL",
+    "list_1_name": "Display name of Lista 1 (source list)",
+    "list_2_name": "Display name of Lista 2 (target list)",
+    "rmr_master_path": "Full path to RMR_Master.xlsm (must be in input/ folder)",
+    "owner": "Your name for assignment filtering (Hector or Daniel)",
+    "client_id / client_secret": "Optional - only needed if using app-based authentication for STEP4"
+  }
 }

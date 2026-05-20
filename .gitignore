@@ -1,9 +1,14 @@
 # ─────────────────────────────────────────────────────────
 #  RMR Activation — .gitignore
+#  Power Query + SharePoint Lists version
 # ─────────────────────────────────────────────────────────
 
-# Real config (contains sensitive credentials and GUIDs)
+# Real config (contains sensitive credentials, paths, GUIDs)
 config.json
+
+# RMR Master file (contains real operational data and connections)
+input/RMR_Master.xlsm
+RMR_Master.xlsm
 
 # Microsoft auth token cache
 .token_cache.bin
@@ -12,11 +17,12 @@ config.json
 input/.step1_data.json
 input/.step2_data.json
 
-# Input folder — SAP exports and Monitoring files (real operational data)
-input/
-!input/.gitkeep
+# Input folder — SAP exports and operational files
+input/*.xlsx
+input/*.xls
+input/*.xlsm
 
-# Output folder — generated RMR files (real operational data)
+# Output folder — generated files
 output/
 !output/.gitkeep
 
@@ -48,3 +54,12 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# Excel temporary files
+~$*.xlsx
+~$*.xlsm
+~$*.xls
+
+# Backup files
+*.bak
+*.backup
